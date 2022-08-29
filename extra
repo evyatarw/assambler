@@ -1,0 +1,286 @@
+#include "header.h"
+
+
+void initialize_array(char *arr, int size)
+{
+	int i;
+	for (i=0; i<size; i++)
+		arr[i]='\0';
+}
+
+int skip_space(char *string, int i)
+{
+	if (i>=MAX_LENGTH)
+		return INT_MAX;
+	if (isspace(string[i]))
+		return skip_space(string, i+1);
+	if (string[i] == '\0')
+		return INT_MAX;
+	return i;
+}
+
+int read_word(char *word, char *line, int *i, char *file, int line_n, int *PERRORS)
+{
+	int *j=(int*)malloc(sizeof(int));
+	if(j == NULL)
+		perror("Error");
+	/*enum decision{_other, _command, _data, _string, _label}; - definition at header file*/
+	initialize_array(word,MAX_LENGTH);
+	while(!(isspace(line[*i]))&&(*i<MAX_LENGTH)&&(*j<MAX_LENGTH)&&((line[*i])!=',')&&((line[*i])!='\0'))
+	{
+		word[*j]=line[*i];
+		(*j)++;
+		(*i)++;
+		if(*i<MAX_LENGTH)
+			if((line[*i] == ':') && (isspace( line[++(*i)] ))) {
+				(*i)++;
+				word[*j] = '\0';
+				free(j);
+				return _label;
+			}
+	}
+	if(*j>=MAX_LENGTH) {
+		error (file, line_n, PERRORS, "one word can not be longest then 30 chars");
+		return _other;
+	}
+	*(word+*j) = '\0';			/* end of the word */
+	free(j);
+	if(recognize_operation(word).name[0] != '\0') 
+		return _command;
+	if(strcmp(word,".data") == 0) 
+		return _data;
+	if(strcmp(word,".string") == 0)
+		return _string;
+	if(strcmp(word,".enery") == 0) 
+		return _entery;
+	if(strcmp(word,".extern") == 0) 
+		return _extern;
+	return _other;
+}
+
+void initialize_b_word(struct ic *P)
+{
+	(P->val).e = 0;
+	(P->val).r = 0;
+	(P->val).a = 0;
+	(P->val).funct = 0;
+	(P->val).regSource = 0;
+	(P->val).source = 0;
+	(P->val).regDest = 0;
+	(P->val).dest = 0;
+	(P->val).opcode = 0;
+	(P->p_word).e = 0;
+	(P->p_word).r = 0;
+	(P->p_word).a = 0;
+	(P->p_word).w = 0;
+}
+
+void next_ic(struct ic *P)
+{
+	if(P->word_place > 100) {
+		P->next = (struct ic*)malloc(sizeof(struct ic));
+		if(P->next == NULL)
+			perror("Error");
+		P->next->word_place = (P->word_place)+1;
+		P->next->prev = P;
+		P->next->next = NULL;
+		initialize_b_word(P->next);
+		P->next->label = NULL;
+		P = P->next;
+	}
+}
+
+void copy_ic (struct ic *P1, struct ic *P2)
+{
+	(P1->val).e = (P2->val).e;
+	(P1->val).r = (P2->val).r;
+	(P1->val).a = (P2->val).a;
+	(P1->val).funct = (P2->val).funct;
+	(P1->val).regSource = (P2->val).regSource;
+	(P1->val).source = (P2->val).source;
+	(P1->val).regDest = (P2->val).regDest;
+	(P1->val).dest = (P2->val).dest;
+	(P1->val).opcode = (P2->val).opcode;
+	(P1->p_word).e = (P2->p_word).e;
+	(P1->p_word).r = (P2->p_word).r;
+	(P1->p_word).a = (P2->p_word).a;
+	(P1->p_word).w = (P2->p_word).w;
+	P1->next = P2->next;
+	P1->word_place = P2->word_place;
+	P1->prev = P2->prev;
+	strcpy(P1->label,P2->label);
+}
+
+void copy_dc (struct dc *P1, struct dc *P2)
+{
+	P1->mem_place = P2->mem_place;
+	P1->next = P2->next;
+	P1->val = P2->val;
+}
+
+void copy_label (struct label *P1, struct label *P2)
+{
+	strcpy(P1->name,P2->name);
+	P1->value = P2->value;
+	P1->featur = P2->featur;
+	P1->next = P2->next;
+	P1->prev = P2->prev;
+}
+
+
+void error (char * file, int line, int *PERRORS, char * description)
+{
+	fprintf(stdout, "\nError in file \"%s\", line \"%d\": %s.\n", file,line, description);
+	(*PERRORS)++;
+}
+
+/*return 0 if the label not exist, 1 if it does*/
+int is_label_exist (struct label l, char *name)
+{
+	struct label *p = (struct label*)malloc(sizeof(struct label));
+	if(p == NULL)
+		perror("Error");
+	p=&l;
+	if(p!=NULL){
+		if (strcmp(p->name, name)==0)
+			return 1;
+		return is_label_exist(*(p->next), name);
+	}
+	return 0;
+}
+
+struct label new_label (struct label *P)
+{
+	if(*(P->name)!='\0') { /* if it is'nt the first label - criate new one */
+		P->next = (struct label*)malloc(sizeof(struct label));
+			if(P->next == NULL)
+				perror("Error");
+		P->next->prev = P;
+		P = P->next;
+		P->next = NULL;
+	}
+	return *P;
+}
+
+void is_comma_error (int operand, int *comma, int *PERRORS, char * file, int line)
+{
+	if(operand > *comma) {
+		error (file, line, PERRORS, "missing comma");
+		(*comma)++;
+	}
+}
+
+void check_operand_errors (char *command, int operand, int *comma, int *PERRORS, char * file, int line)
+{
+	if(operand > *comma) {
+		error (file, line, PERRORS, "missing comma");
+		(*comma)++;
+	}
+	if(recognize_operation(command).opcode < 5) {
+		if(operand > 1)
+			error (file, line, PERRORS, "unnecessary operand");
+	}
+	else if(recognize_operation(command).opcode < 14) {
+			if(operand > 2)
+				error (file, line, PERRORS, "unnecessary operand");
+			}
+		else if(operand > 0) 
+				error (file, line, PERRORS, "unnecessary operand");
+}
+
+void check_label_errors (char *name, int *PERRORS, char * file, int line)
+{
+	if(!(isalpha(name[0])))
+		error(file, line,PERRORS,"label must start with alphabetic");
+	if(!(strcmp(name,".data")) || !(strcmp(name,".string")) || !(strcmp(name,".extern")) || !(strcmp(name,".entery")) || (recognize_operation(name).name[0] != '\0') || ((name[0]=='r') && (name[1]>='0') && (name[1]<='7') && (name[2]=='\0')))
+		error(file, line,PERRORS,"reserved word can not be label");
+}
+
+void insert_operation (struct operation *oper, char *name, int opcode, int fu)
+{
+	strcpy(oper->name, name);
+	oper->opcode = opcode;
+	oper->funct = fu;
+}
+
+struct operation recognize_operation(char *name)
+{
+	struct operation _mov;
+	struct operation _cmp;
+	struct operation _add;
+	struct operation _sub;
+	struct operation _lea;
+	struct operation _clr;
+	struct operation _not;
+	struct operation _inc;
+	struct operation _dec;
+	struct operation _jmp;
+	struct operation _bne;
+	struct operation _jsr;
+	struct operation _red;
+	struct operation _prn;
+	struct operation _rts;
+	struct operation _stop;
+	struct operation _err;
+
+	insert_operation (&_mov,"mov",0,0);
+	insert_operation (&_cmp,"mov",1,0);
+	insert_operation (&_add,"mov",2,0);
+	insert_operation (&_sub,"mov",3,0);
+	insert_operation (&_lea,"mov",4,0);
+	insert_operation (&_clr,"mov",5,1);
+	insert_operation (&_not,"mov",5,2);
+	insert_operation (&_inc,"mov",5,3);
+	insert_operation (&_dec,"mov",5,4);
+	insert_operation (&_jmp,"mov",9,1);
+	insert_operation (&_bne,"mov",9,2);
+	insert_operation (&_jsr,"mov",9,3);
+	insert_operation (&_red,"mov",12,0);
+	insert_operation (&_prn,"mov",13,0);
+	insert_operation (&_rts,"mov",14,0);
+	insert_operation (&_stop,"mov",15,0);
+	insert_operation (&_err,"",0,0);
+	switch (name[0])
+	{
+		case 'a':
+			if(strcmp(name,"add")==0) return _add;
+			return _err;
+		case 'b':
+			if(strcmp(name,"bne")==0) return _bne;
+			return _err;
+		case 'c':
+			if(strcmp(name,"cmp")==0) return _cmp;
+			if(strcmp(name,"clr")==0) return _clr;
+			return _err;
+		case 'd':
+			if(strcmp(name,"dec")==0) return _dec;
+			return _err;
+		case 'i':
+			if(strcmp(name,"inc")==0) return _inc;
+			return _err;
+		case 'j':
+			if(strcmp(name,"jmp")==0) return _jmp;
+			if(strcmp(name,"jsr")==0) return _jsr;
+			return _err;
+		case 'l':
+			if(strcmp(name,"lea")==0) return _lea;
+			return _err;
+		case 'm':
+			if(strcmp(name,"mov")==0) return _mov;
+			else return _err;
+		case 'n':
+			if(strcmp(name,"not")==0) return _not;
+			else return _err;
+		case 'p':
+			if(strcmp(name,"prn")==0) return _prn;
+			else return _err;
+		case 'r':
+			if(strcmp(name,"red")==0) return _red;
+			if(strcmp(name,"rts")==0) return _rts;
+			else return _err;
+		case 's':
+			if(strcmp(name,"stop")==0) return _stop;
+			else return _err;
+		default : return _err;
+	}
+}
