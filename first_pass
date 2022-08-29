@@ -1,0 +1,349 @@
+#include "header.h"
+
+/*	scan the input file and build the binary words. */
+
+struct ret first_pass (char *assembly_file)
+{
+	FILE *ASMBLF = fopen(assembly_file,"r");
+	char command_line[MAX_LENGTH], word[MAX_LENGTH], command[MAX_LENGTH], label_name[MAX_LENGTH];
+	static struct ic IC_HEAD, *PIC = &IC_HEAD; 
+	static struct dc DC_HEAD = {0, 0, NULL}, *PDC = &DC_HEAD;     	  
+	static struct label LABEL_HEAD={"\0",0,NO_VAL,NULL}, EXT_HEAD={"\0",0,NO_VAL,NULL}, ENT_HEAD={"\0",0,NO_VAL,NULL};
+	static struct label *PLABEL = &LABEL_HEAD, *PEXT = &EXT_HEAD, *PENT = &ENT_HEAD;
+	int i=0, temp;
+	int assembly_line=1, num, operand, comma, is_data, is_string, is_extern, is_entery, end_l;
+	int counter_ic=IC_START,counter_dc=0, c_errors=0, *PERRORS=&c_errors;
+	struct ret fret;
+	
+	IC_HEAD.word_place = IC_START;
+	IC_HEAD.next = NULL;
+	IC_HEAD.prev = NULL;
+	initialize_b_word(&IC_HEAD);
+
+	if (ASMBLF == NULL)	{
+		error(assembly_file, 0, PERRORS, "Can't open file");
+		exit(0);
+	}
+
+	initialize_array(command_line,MAX_LENGTH); /* prepare to get command line */
+	while ( fgets(command_line,MAX_LENGTH,ASMBLF) != NULL ) /* get command line */
+	{
+				/* new line and new details */
+		initialize_array(command,MAX_LENGTH);
+		initialize_array(label_name,MAX_LENGTH);
+		operand = 0;
+		comma = 0;
+		is_data = 0;
+		is_string = 0;
+		is_extern = 0;
+		is_entery = 0;
+		end_l = 0;
+		num = INT_MAX;
+		i=skip_space(command_line,0);
+		if (i>=MAX_LENGTH) { /* empty line? */
+			assembly_line++;
+			initialize_array(command_line,MAX_LENGTH); /* prepare to get command line */
+			continue;
+		}
+
+		if (command_line[i] == ';') { /* note line? */
+			assembly_line++;
+			initialize_array(command_line,MAX_LENGTH); /* prepare to get command line */
+			continue;   /* the function fgets will jump to the next line */
+		}
+		fseek(ASMBLF, -1, SEEK_CUR);
+		if(fgetc(ASMBLF) != (int)'\n')
+			error(assembly_file, assembly_line, PERRORS, "line longest then 80");
+		/*check the first word of the line if it's label, command, data, string or other*/
+		temp = read_word(word,command_line,&i,assembly_file, assembly_line, PERRORS);
+		if (temp == _label) {
+			check_label_errors (word,PERRORS,assembly_file,assembly_line);
+			strcpy(label_name,word);
+			i=skip_space(command_line,i);
+			temp = read_word(word,command_line,&i,assembly_file, assembly_line, PERRORS);
+		}
+
+		switch(temp)
+		{
+			case _command:
+				strcpy(command,word);
+				next_ic(PIC);
+				(PIC->val).opcode = (recognize_operation(command)).opcode;
+				(PIC->val).funct = (recognize_operation(command)).opcode;
+				(PIC->val).e = 0;
+				(PIC->val).r = 0;
+				(PIC->val).a = 1;
+				break;
+			case _data: is_data = 1;
+				break;
+			case _string: is_string = 1;
+				break;
+			case _extern: is_extern = 1;
+				break;
+			case _entery: is_entery = 1;
+				break;
+			case _label: error(assembly_file, assembly_line, PERRORS, "illegal double label");
+				break;
+			default: error(assembly_file, assembly_line, PERRORS, "illegal operation");
+		} 
+
+		if((temp == _other) || (temp == _label)){
+			initialize_array(command_line,MAX_LENGTH); /* prepare to get command line */
+			continue;
+			}
+		if(((*label_name)!='\0') && !((is_extern) || (is_entery))) {
+			if(is_label_exist(LABEL_HEAD,label_name))
+				error(assembly_file, assembly_line, PERRORS, "the declered label is oredy declered");
+			new_label(PLABEL);
+			PLABEL->name = label_name;
+			PLABEL->value = ((is_data)||(is_string))? PDC->mem_place+1: PIC->word_place+1;
+			PLABEL->featur = ((is_data)||(is_string))? _data+_string: _command;
+		} 
+				/* separate every operand and absorb it */
+		for (i=skip_space(command_line,0); (i<MAX_LENGTH); i++)
+		{
+			if(command_line[i] == ',') {				/* comma */
+				if( (recognize_operation(command).name[0] != '\0') && (recognize_operation(command).opcode < 5) && ((operand == 1) || ((is_data+is_string) && (operand > 0))) || ((is_data) && (num != INT_MAX)) )
+					comma = 1;
+				else error(assembly_file, assembly_line, PERRORS, "illegal comma");
+				i++;
+			}
+			if(i>=MAX_LENGTH)
+				end_l=1;
+			read_word(word,command_line,&i,assembly_file, assembly_line, PERRORS);
+			if(end_l) {
+				error(assembly_file, assembly_line, PERRORS, "unnecessary operand");
+				break;
+			}
+			if(is_data) {					/* the word is operand of data */
+				if(PDC->mem_place!=0) { /* if it is'nt the first dc - criate new dc */
+					PDC->next = (struct dc*)malloc(sizeof(struct dc));
+					if(PDC->next == NULL)
+						perror("Error");
+					PDC->next->mem_place = (PDC->mem_place)+1; 
+					PDC = PDC->next;
+					PDC->next = NULL;
+				}
+				PDC->val = atoi(word);
+				if(PDC->val == 0) {
+					strcat( word, " is not a number" );
+					error (assembly_file, assembly_line, PERRORS, word);
+				}
+				num = PDC->val;
+				is_comma_error(operand, &comma, PERRORS, assembly_file, assembly_line);
+				operand++;
+				continue;
+			} 
+			if(is_string) {					/* the word is operand of data */
+				if(word[0] == '"') {
+					i = i-(strlen(word)-1);
+					while((command_line[i]!='"') && (command_line[i]!='\0') && (i<MAX_LENGTH-1))
+					{
+						if(PDC->mem_place!=0) {/* if it is'nt the first dc - criate new dc*/
+							PDC->next = (struct dc*)malloc(sizeof(struct dc));
+							PDC->next->mem_place = (PDC->mem_place)+1;
+							PDC = PDC->next;
+							PDC->next = NULL;
+						}
+						PDC->val = command_line[i]; 
+						i++;
+					}
+					if(!(command_line[i] == '"'))
+						error (assembly_file, assembly_line, PERRORS, "expected string but there is no closing \"");
+					else i = skip_space(command_line,i);
+				} else error(assembly_file,assembly_line,PERRORS,"expected string but there is no \" at first");
+				end_l=1; /* sentence is done */
+				continue;
+			} 
+			if(is_entery) {
+				strcpy(new_label(PENT).name,word);
+				if((*label_name) != '\0') {
+					PLABEL = PLABEL->prev;
+					free(PLABEL->next);
+					PLABEL->next = NULL;
+				}
+				end_l=1; /* sentence is done */
+				continue;
+			}
+			if(is_extern) {
+				strcpy(new_label(PEXT).name,word);
+				if((*label_name) != '\0') {
+					PLABEL = PLABEL->prev;
+					free(PLABEL->next);
+					PLABEL->next = NULL;
+				}
+				strcpy(new_label(PLABEL).name,word);
+				PLABEL->value = 0;
+				PLABEL->featur = _extern;
+				
+				end_l=1; /* sentence is done */
+				continue;
+			}
+			if(word[0] == '&') {		/* the word is operand &-- */
+				if(temp != _command) {
+					error(assembly_file, assembly_line, PERRORS, "illegal operand - &");
+					end_l=1;
+					break;
+				}
+				next_ic(PIC);
+				(PIC->p_word).w = 0;  /* return to it at the second pass */
+				(PIC->p_word).e = 0;
+				(PIC->p_word).r = 0;
+				(PIC->p_word).a = 1;
+				strcpy(PIC->label,strcat(word+1,"&"));
+				if(operand) {
+					if((PIC->prev->val).opcode > NO_VAL) {
+						(PIC->prev->val).regSource = 0;
+						(PIC->prev->val).source = 2;
+					} else {
+						(PIC->prev->prev->val).regSource = 0;
+						(PIC->prev->prev->val).source = 2;
+					}
+				} else {
+					if((PIC->prev->val).opcode > NO_VAL) {
+						(PIC->prev->val).regDest = 0;
+						(PIC->prev->val).dest = 2;
+					}else {
+						(PIC->prev->prev->val).regDest = 0;
+						(PIC->prev->prev->val).dest = 2;
+					}
+				}
+				if((strcmp(command,"jmp"))||(strcmp(command,"bne"))||(strcmp(command,"jsr")))
+					error (assembly_file, assembly_line, PERRORS, "can not use '&' at this command");
+				check_operand_errors(command, operand, &comma, PERRORS, assembly_file, assembly_line);
+				operand++;
+				continue;
+			}
+			if(word[0] == '#') {						/* the word is operand #-- */
+				next_ic(PIC);
+				(PIC->p_word).w = atoi(word+1);
+				(PIC->p_word).e = 0;
+				(PIC->p_word).r = 0;
+				(PIC->p_word).a = 1;
+				if(operand) {
+					if((PIC->prev->val).opcode > NO_VAL) {
+						(PIC->prev->val).regSource = 0;
+						(PIC->prev->val).source = 0;
+					} else {
+						(PIC->prev->prev->val).regSource = 0;
+						(PIC->prev->prev->val).source = 0;
+					}
+				} else {
+					if((PIC->prev->val).opcode > NO_VAL) {
+						(PIC->prev->val).regDest = 0;
+						(PIC->prev->val).dest = 0;
+					} else {
+						(PIC->prev->prev->val).regDest = 0;
+						(PIC->prev->prev->val).dest = 0;
+					}
+				}
+				check_operand_errors(command, operand, &comma, PERRORS, assembly_file, assembly_line);
+				operand++;
+				continue;
+			} 
+			if((word[0]=='r') &&(word[1]>='0') &&(word[1]<'8') &&(word[2]==' ')) {/*the word is register*/
+				if(operand) {
+					if((PIC->prev->val).opcode > NO_VAL) {
+						(PIC->prev->val).regSource = 0;
+						(PIC->prev->val).source = 3;
+					} else {
+						(PIC->prev->prev->val).regSource = 0;
+						(PIC->prev->prev->val).source = 3;
+					}
+				} else {
+					if((PIC->prev->val).opcode > NO_VAL) {
+						(PIC->prev->val).regDest = 0;
+						(PIC->prev->val).dest = 3;
+					} else {
+						(PIC->prev->prev->val).regDest = 0;
+						(PIC->prev->prev->val).dest = 3;
+					}
+				}
+				check_operand_errors(command, operand, &comma, PERRORS, assembly_file, assembly_line);
+				operand++;
+				continue;
+			}
+			if(1) { /* If we'd gotten this far this is a label operand */
+				next_ic(PIC);
+				PIC = PIC->next;
+				(PIC->p_word).w = 0;  /* return to it at the second pass */
+				(PIC->p_word).e = 0;
+				(PIC->p_word).r = 0;
+				(PIC->p_word).a = 1;
+				strcpy(PIC->label,word);
+				if(operand) {
+					if((PIC->prev->val).opcode > NO_VAL) {
+						(PIC->prev->val).regSource = 0;
+						(PIC->prev->val).source = 1;
+					} else {
+						(PIC->prev->prev->val).regSource = 0;
+						(PIC->prev->prev->val).source = 1;
+					}
+				} else {
+					if((PIC->prev->val).opcode > NO_VAL) {
+						(PIC->prev->val).regDest = 0;
+						(PIC->prev->val).dest = 1;
+					} else {
+						(PIC->prev->prev->val).regDest = 0;
+						(PIC->prev->prev->val).dest = 1;
+					}
+				}
+				check_operand_errors(command, operand, &comma, PERRORS, assembly_file, assembly_line);
+				operand++;
+			}
+			/* get next word */
+		}  /* end of the input line */ 	
+
+		if(recognize_operation(command).name[0] != '\0') {
+			if(operand < 1) {
+				error (assembly_file, assembly_line, PERRORS, "missing operand");
+				comma++;
+			}
+			else if(operand < 2) {
+				error (assembly_file, assembly_line, PERRORS, "missing operand");
+				comma++;
+			}
+		}
+
+		if((temp == _command) && (operand == 1)) { 
+			if((PIC->val).a) {
+				(PIC->val).regSource = (PIC->val).regDest;
+				(PIC->val).source = (PIC->val).dest;
+				(PIC->val).regDest = 0;
+				(PIC->val).dest = 0;
+			}
+			else {
+				(PIC->prev->val).regSource = (PIC->prev->val).regDest;
+				(PIC->prev->val).source = (PIC->prev->val).dest;
+				(PIC->prev->val).regDest = 0;
+				(PIC->prev->val).dest = 0;
+			}
+		}
+						/* prepare to get new input line */
+			initialize_array(command_line,MAX_LENGTH);
+			assembly_line++;
+	}
+					/* end of the input file */
+					/* convert the label value to ic counter */
+	counter_ic = PIC->word_place;
+	counter_dc = PDC->mem_place;
+	PLABEL = &LABEL_HEAD; 
+	while ((PLABEL != NULL) && (PLABEL->featur != NO_VAL)) 
+	{
+		if(PLABEL->featur == _data+_string)
+			PLABEL->value += counter_ic;
+		PLABEL = PLABEL->next;
+	}
+
+	fclose(ASMBLF);
+	copy_ic (&(fret.IC), &(IC_HEAD));
+	copy_dc (&(fret.DC),&(DC_HEAD));
+	copy_label (&(fret.LABEL), &(LABEL_HEAD));
+	copy_label (&(fret.EXT), &(EXT_HEAD));
+	copy_label (&(fret.ENT), &(ENT_HEAD));
+	fret.counter_dc = counter_dc;
+	fret.counter_ic = counter_ic;
+	fret.errors = c_errors;
+
+	return sacendpass(fret);
+}
